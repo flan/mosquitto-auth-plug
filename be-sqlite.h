@@ -33,7 +33,9 @@
 
 struct sqlite_backend {
 	sqlite3 *sq;
-	sqlite3_stmt *stmt;
+        sqlite3_stmt *userquery;
+        sqlite3_stmt *superquery;
+        sqlite3_stmt *aclquery;
 };
 
 void *be_sqlite_init();

@@ -41,7 +41,7 @@ void *be_sqlite_init()
 	struct sqlite_backend *conf;
 	int res;
 	int flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_SHAREDCACHE;
-	char *dbpath, *userquery;
+	char *dbpath, *userquery, *superquery, *aclquery;
 
 	if ((dbpath = p_stab("dbpath")) == NULL) {
 		_fatal("Mandatory parameter `dbpath' missing");
@@ -52,6 +52,14 @@ void *be_sqlite_init()
 		_fatal("Mandatory parameter `sqliteuserquery' missing");
 		return (NULL);
 	}
+	
+	if ((superquery = p_stab("sqlitesuperquery")) == NULL) {
+                _log(LOG_DEBUG, "Optional parameter `sqlitesuperquery' missing");
+        }
+	
+	if ((aclquery = p_stab("sqliteaclquery")) == NULL) {
+                _log(LOG_DEBUG, "Optional parameter `sqliteaclquery' missing");
+        }
 
 	conf = (struct sqlite_backend *)malloc(sizeof(struct sqlite_backend));
 
@@ -61,13 +69,31 @@ void *be_sqlite_init()
 		return (NULL);
 	}
 
-	if ((res = sqlite3_prepare(conf->sq, userquery, strlen(userquery), &conf->stmt, NULL)) != SQLITE_OK) {
-		fprintf(stderr, "Can't prepare: %s\n", sqlite3_errmsg(conf->sq));
+	if ((res = sqlite3_prepare_v2(conf->sq, userquery, strlen(userquery), &conf->userquery, NULL)) != SQLITE_OK) {
+		fprintf(stderr, "Can't prepare userquery: %s\n", sqlite3_errmsg(conf->sq));
 		sqlite3_close(conf->sq);
 		free(conf);
 		return (NULL);
 	}
-
+	
+	if (superquery != NULL) {
+            if ((res = sqlite3_prepare_v2(conf->sq, superquery, strlen(superquery), &conf->superquery, NULL)) != SQLITE_OK) {
+                    fprintf(stderr, "Can't prepare superquery: %s\n", sqlite3_errmsg(conf->sq));
+                    sqlite3_close(conf->sq);
+                    free(conf);
+                    return (NULL);
+            }
+        }
+	
+	if (aclquery != NULL) {
+            if ((res = sqlite3_prepare_v2(conf->sq, aclquery, strlen(aclquery), &conf->aclquery, NULL)) != SQLITE_OK) {
+                    fprintf(stderr, "Can't prepare aclquery: %s\n", sqlite3_errmsg(conf->sq));
+                    sqlite3_close(conf->sq);
+                    free(conf);
+                    return (NULL);
+            }
+        }
+        
 	return (conf);
 }
 
@@ -76,7 +102,7 @@ void be_sqlite_destroy(void *handle)
 	struct sqlite_backend *conf = (struct sqlite_backend *)handle;
 
 	if (conf) {
-		sqlite3_finalize(conf->stmt);
+		sqlite3_finalize(conf->userquery);
 		sqlite3_close(conf->sq);
 		free(conf);
 	}
@@ -91,36 +117,125 @@ char *be_sqlite_getuser(void *handle, const char *username, const char *password
 	if (!conf)
 		return (NULL);
 
-	sqlite3_reset(conf->stmt);
-	sqlite3_clear_bindings(conf->stmt);
+	sqlite3_reset(conf->userquery);
+	sqlite3_clear_bindings(conf->userquery);
 
-	res = sqlite3_bind_text(conf->stmt, 1, username, -1, SQLITE_STATIC);
+	res = sqlite3_bind_text(conf->userquery, 1, username, -1, SQLITE_STATIC);
 	if (res != SQLITE_OK) {
 		puts("Can't bind");
 		goto out;
 	}
 
-	res = sqlite3_step(conf->stmt);
-
+	res = sqlite3_step(conf->userquery);
 	if (res == SQLITE_ROW) {
-		v = (char *)sqlite3_column_text(conf->stmt, 0);
+		v = (char *)sqlite3_column_text(conf->userquery, 0);
 		if (v)
 			value = strdup(v);
-	}
+	} else {
+            fprintf(stderr, "Can't query: [%d] %s\n", res, sqlite3_errmsg(conf->sq));
+        }
 
     out:
-	sqlite3_reset(conf->stmt);
+	sqlite3_reset(conf->userquery);
 
 	return (value);
 }
 
 int be_sqlite_superuser(void *handle, const char *username)
 {
-	return 0;
+	struct sqlite_backend *conf = (struct sqlite_backend *)handle;
+        int res;
+        int sq_username_idx;
+        int issuper = FALSE;
+
+        if (!conf || !conf->superquery || !username || !*username)
+                return (FALSE);
+        
+        sqlite3_reset(conf->superquery);
+        sqlite3_clear_bindings(conf->superquery);
+        
+        sq_username_idx = sqlite3_bind_parameter_index(conf->superquery, ":usr");
+        if (sq_username_idx != 0) {
+                res = sqlite3_bind_text(conf->superquery, sq_username_idx, username, -1, SQLITE_STATIC);
+                if (res != SQLITE_OK) {
+                        puts("Can't bind");
+                        goto out;
+                }
+        }
+        
+        res = sqlite3_step(conf->superquery);
+        if (res == SQLITE_ROW) {
+                issuper = sqlite3_column_int(conf->superquery, 0);
+        } else {
+            fprintf(stderr, "Can't query: [%d] %s\n", res, sqlite3_errmsg(conf->sq));
+        }
+        
+    out:
+        sqlite3_reset(conf->superquery);
+
+        return (issuper);
 }
 
 int be_sqlite_aclcheck(void *handle, const char *clientid, const char *username, const char *topic, int acc)
 {
-	return 1;
+        struct sqlite_backend *conf = (struct sqlite_backend *)handle;
+        int res;
+        int sq_username_idx, sq_acc_idx;
+        int match = FALSE;
+        char *v;
+
+        if (!conf || !conf->aclquery)
+                return (FALSE);
+
+        sqlite3_reset(conf->aclquery);
+        sqlite3_clear_bindings(conf->aclquery);
+        
+        sq_username_idx = sqlite3_bind_parameter_index(conf->aclquery, ":usr");
+        if (sq_username_idx != 0) {
+                res = sqlite3_bind_text(conf->aclquery, sq_username_idx, username, -1, SQLITE_STATIC);
+                if (res != SQLITE_OK) {
+                        puts("Can't bind");
+                        goto out;
+                }
+        }
+        sq_acc_idx = sqlite3_bind_parameter_index(conf->aclquery, ":acc");
+        if (sq_acc_idx != 0) {
+                res = sqlite3_bind_int(conf->aclquery, sq_acc_idx, acc);
+                if (res != SQLITE_OK) {
+                        puts("Can't bind");
+                        goto out;
+                }
+        }
+        
+        while ((res = sqlite3_step(conf->aclquery)) == SQLITE_ROW) {
+                v = (char *)sqlite3_column_text(conf->aclquery, 0);
+                if (v != NULL) {
+                        /* Check mosquitto_match_topic.
+                         * If true, set match and break out of loop. */
+                        
+                        char *expanded;
+                        
+                        t_expand(clientid, username, v, &expanded);
+                        if (expanded && *expanded) {
+                                mosquitto_topic_matches_sub(expanded, topic, &bf);
+                                match |= bf;
+                                _log(LOG_DEBUG, "  sqlite: topic_matches(%s, %s) == %d",
+                                        expanded, v, bf);
+
+                                free(expanded);
+                        }
+                        if ( match != 0 ) {
+                                goto out;
+                        }
+                }
+        }
+        if (res != SQLITE_DONE) {
+            fprintf(stderr, "Can't query: [%d] %s\n", res, sqlite3_errmsg(conf->sq));
+        }
+        
+    out:
+        sqlite3_reset(conf->aclquery);
+
+        return (match);
 }
 #endif /* BE_SQLITE */
