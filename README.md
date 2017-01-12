@@ -23,8 +23,8 @@ and authorization (ACL). Currently not all back-ends have the same capabilities
 | Capability                 | mysql | redis | cdb   | sqlite | ldap | psk | postgres | http | jwt | MongoDB |
 | -------------------------- | :---: | :---: | :---: | :---:  | :-:  | :-: | :------: | :--: | :-: | :-----: |
 | authentication             |   Y   |   Y   |   Y   |   Y    |  Y   |  Y  |    Y     |  Y   |  Y  |  Y      |
-| superusers                 |   Y   |       |       |        |      |  2  |    Y     |  Y   |  Y  |  Y      |
-| acl checking               |   Y   |   Y   |   1   |   1    |      |  2  |    Y     |  Y   |  Y  |  Y      |
+| superusers                 |   Y   |       |       |   Y    |      |  2  |    Y     |  Y   |  Y  |  Y      |
+| acl checking               |   Y   |   Y   |   1   |   Y    |      |  2  |    Y     |  Y   |  Y  |  Y      |
 | static superusers          |   Y   |   Y   |   Y   |   Y    |      |  2  |    Y     |  Y   |  Y  |  Y      |
 
  1. Currently not implemented; back-end returns TRUE
@@ -280,12 +280,23 @@ auth_opt_ldap_uri ldap://127.0.0.1/ou=Users,dc=mens,dc=de?cn?sub?(&(objectclass=
 | -------------- | ----------------- | :---------: | ----------  |
 | cdbname        |                   |     Y       | path to .cdb |
 
+
 ### SQLITE
 
-| Option          | default           |  Mandatory  | Meaning     |
-| --------------- | ----------------- | :---------: | ----------  |
-| dbpath          |                   |     Y       | path to database |
-| sqliteuserquery |                   |     Y       | SQL for users |
+| Option           | default           |  Mandatory  | Meaning     |
+| ---------------- | ----------------- | :---------: | ----------  |
+| dbpath           |                   |     Y       | path to database |
+| sqliteuserquery  |                   |     Y       | SQL for users |
+| sqlitesuperquery |                   |     N       | SQL for superusers |
+| sqliteaclquery   |                   |     N       | SQL for ACLs |
+
+SQLite supports the same general semantics as MySQL and Postgres, but it uses
+named parameters for its variable substitution, allowing for repeated use and
+more flexibility with ordering elements: `sqliteuserquery` accepts only `?` for
+username for backwards-compatibility, but `sqlitesuperquery` accepts `:usr` for
+its username substitution, and `sqliteaclquery` accepts `:usr` and `:acc` for
+access-level.
+
 
 ### Redis
 
